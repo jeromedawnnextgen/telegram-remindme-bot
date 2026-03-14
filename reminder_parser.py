@@ -1,10 +1,13 @@
 import os
 import re
 import json
+import logging
 import dateparser
 import anthropic
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+log = logging.getLogger(__name__)
 
 # Strip leading filler before "remind me"
 _FILLER = re.compile(
@@ -118,7 +121,9 @@ def _extract(text: str) -> tuple[str | None, str | None]:
 async def _claude_fallback(text: str, timezone: str) -> tuple[datetime, str] | None:
     client = _get_claude()
     if client is None:
+        log.warning("Claude fallback skipped: ANTHROPIC_API_KEY not set")
         return None
+    log.info("Trying Claude fallback for: %r", text)
 
     now = datetime.now(ZoneInfo(timezone))
 
@@ -160,7 +165,8 @@ async def _claude_fallback(text: str, timezone: str) -> tuple[datetime, str] | N
 
         return fire_at_utc, data["task"].strip()
 
-    except Exception:
+    except Exception as e:
+        log.error("Claude fallback failed: %s", e, exc_info=True)
         return None
 
 
