@@ -151,7 +151,25 @@ async def _claude_fallback(text: str, timezone: str) -> tuple[datetime, str] | N
             }]
         )
 
-        data = json.loads(response.content[0].text.strip())
+        # Extract text from response, handling empty or non-text blocks
+        raw = ""
+        for block in response.content:
+            if hasattr(block, "text") and block.text:
+                raw = block.text.strip()
+                break
+
+        log.info("Claude raw response: %r", raw)
+
+        # Strip markdown code fences if present
+        raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw, flags=re.DOTALL).strip()
+
+        # Find JSON object in response even if surrounded by text
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not m:
+            log.warning("No JSON found in Claude response: %r", raw)
+            return None
+
+        data = json.loads(m.group())
         if "error" in data:
             return None
 
