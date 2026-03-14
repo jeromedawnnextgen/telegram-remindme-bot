@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime
 
 _data_dir = os.environ.get("DATA_DIR", ".")
+os.makedirs(_data_dir, exist_ok=True)
 DB_PATH = os.path.join(_data_dir, "reminders.db")
 
 
