@@ -9,7 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 import db
 import scheduler as sched
-from reminder_parser import parse_reminder
+from reminder_parser import parse_reminder_smart
 
 load_dotenv()
 
@@ -106,7 +106,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     chat_id = update.effective_chat.id
 
-    result = parse_reminder(text, TIMEZONE)
+    result = await parse_reminder_smart(text, TIMEZONE)
 
     if result is None:
         await update.message.reply_text(
