@@ -24,7 +24,7 @@ _TIME_EXPR_RE = re.compile(
     r'in\s+\d+\s+(?:second|minute|hour|day|week)s?'
     r'|(?:tomorrow|today)(?:\s+at\s+' + _TOD + r')?'
     r'|next\s+\w+(?:\s+at\s+' + _TOD + r')?'
-    r'|at\s+' + _TOD
+    r'|at\s+' + _TOD + r'(?:\s+(?:tomorrow|today|next\s+\w+))?'
     r'|noon|midnight'
     r')',
     re.IGNORECASE,
