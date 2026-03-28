@@ -93,6 +93,39 @@ def get_all_pending() -> list:
         return [dict(r) for r in rows]
 
 
+def get_reminders_in_range(chat_id: int, start_utc: datetime, end_utc: datetime) -> list:
+    """Non-recurring reminders firing between start and end (UTC)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM reminders WHERE chat_id = ? AND fired = 0 "
+            "AND recurrence IS NULL AND fire_at >= ? AND fire_at < ? ORDER BY fire_at",
+            (chat_id, start_utc.isoformat(), end_utc.isoformat()),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_recurring_reminders(chat_id: int) -> list:
+    """All active recurring reminders."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM reminders WHERE chat_id = ? AND fired = 0 AND recurrence IS NOT NULL",
+            (chat_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_projects(chat_id: int) -> list:
+    """All projects with open task counts: [{project, count}]."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT project, COUNT(*) as count FROM tasks "
+            "WHERE chat_id = ? AND done = 0 AND project IS NOT NULL "
+            "GROUP BY project ORDER BY project",
+            (chat_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_todays_reminders(chat_id: int, start_utc: datetime, end_utc: datetime) -> list:
     """One-time reminders firing between start and end (UTC datetimes)."""
     with get_conn() as conn:

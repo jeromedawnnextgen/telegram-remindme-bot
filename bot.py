@@ -125,9 +125,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "NOTES\n"
         "  Note: anything you want to capture\n"
         "  Notes — show last 10 notes\n\n"
-        "DAILY BRIEF\n"
-        "  /brief — show your brief right now\n"
-        "  (auto-sent every morning at 7:00 AM)"
+        "DAILY & WEEKLY VIEW\n"
+        "  /today — today's reminders + open tasks\n"
+        "  /week — 7-day reminder timeline + tasks\n"
+        "  /projects — all projects with task counts\n"
+        "  /brief — full morning digest (auto-sent at 7 AM)\n\n"
+        "  today, this week, upcoming, projects — same as above via text"
     )
 
 
@@ -177,6 +180,134 @@ async def cmd_brief(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         return
     await send_daily_brief(update.effective_chat.id)
+
+
+async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id
+    tz = ZoneInfo(TIMEZONE)
+    now_local = datetime.now(tz)
+
+    day_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(ZoneInfo("UTC"))
+    day_end = day_start + timedelta(days=1)
+
+    one_off = db.get_reminders_in_range(chat_id, day_start, day_end)
+    recurring = db.get_recurring_reminders(chat_id)
+    open_tasks = db.get_tasks(chat_id, include_done=False)
+
+    lines = [f"Today — {now_local.strftime('%A, %b %d')}\n"]
+
+    scheduled = []
+    for r in one_off:
+        fire_at = datetime.fromisoformat(r["fire_at"]).astimezone(tz)
+        h = int(fire_at.strftime("%I"))
+        scheduled.append((fire_at, f"• {h}:{fire_at.strftime('%M %p')} — {r['task']}"))
+
+    # Include recurring reminders that fire today
+    for r in recurring:
+        rec = json.loads(r["recurrence"])
+        occ = next_cron_occurrence(rec, day_start.astimezone(tz) - timedelta(minutes=1))
+        if occ.date() == now_local.date():
+            h = int(occ.strftime("%I"))
+            scheduled.append((occ, f"• {h}:{occ.strftime('%M %p')} — {r['task']} ({rec['label']})"))
+
+    scheduled.sort(key=lambda x: x[0])
+
+    if scheduled:
+        lines.append("Reminders:")
+        lines.extend(f"  {s}" for _, s in scheduled)
+    else:
+        lines.append("No reminders today.")
+
+    lines.append("")
+    if open_tasks:
+        lines.append(f"Open tasks ({len(open_tasks)}):")
+        for i, t in enumerate(open_tasks, 1):
+            proj = f" [{t['project']}]" if t.get("project") else ""
+            lines.append(f"  {i}. {t['task']}{proj}")
+    else:
+        lines.append("No open tasks.")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id
+    tz = ZoneInfo(TIMEZONE)
+    now_local = datetime.now(tz)
+
+    week_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=7)
+    week_start_utc = week_start.astimezone(ZoneInfo("UTC"))
+    week_end_utc = week_end.astimezone(ZoneInfo("UTC"))
+
+    one_off = db.get_reminders_in_range(chat_id, week_start_utc, week_end_utc)
+    recurring = db.get_recurring_reminders(chat_id)
+    open_tasks = db.get_tasks(chat_id, include_done=False)
+
+    # Group one-off reminders by local date
+    by_day: dict = {}
+    for r in one_off:
+        fire_at = datetime.fromisoformat(r["fire_at"]).astimezone(tz)
+        d = fire_at.date()
+        by_day.setdefault(d, []).append((fire_at, r["task"]))
+
+    end_label = (week_start + timedelta(days=6)).strftime("%b %d")
+    lines = [f"Week of {week_start.strftime('%b %d')} – {end_label}\n"]
+
+    for offset in range(7):
+        day = (week_start + timedelta(days=offset)).date()
+        label = "Today" if offset == 0 else day.strftime("%a %b %d")
+        entries = by_day.get(day, [])
+        if entries:
+            lines.append(f"{label}:")
+            for fire_at, task in sorted(entries):
+                h = int(fire_at.strftime("%I"))
+                lines.append(f"  • {h}:{fire_at.strftime('%M %p')} — {task}")
+        else:
+            lines.append(f"{label}: nothing scheduled")
+
+    if recurring:
+        lines.append("\nRecurring:")
+        for r in recurring:
+            rec = json.loads(r["recurrence"])
+            lines.append(f"  • {rec['label']} — {r['task']}")
+
+    lines.append("")
+    if open_tasks:
+        lines.append(f"Open tasks ({len(open_tasks)}):")
+        for i, t in enumerate(open_tasks, 1):
+            proj = f" [{t['project']}]" if t.get("project") else ""
+            lines.append(f"  {i}. {t['task']}{proj}")
+    else:
+        lines.append("No open tasks.")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def cmd_projects(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id
+    projects = db.get_projects(chat_id)
+    untagged = db.get_tasks(chat_id, include_done=False)
+    untagged_count = sum(1 for t in untagged if not t.get("project"))
+
+    if not projects and untagged_count == 0:
+        await update.message.reply_text("No open tasks.")
+        return
+
+    lines = ["Projects:"]
+    for p in projects:
+        lines.append(f"  [{p['project']}] — {p['count']} open task{'s' if p['count'] != 1 else ''}")
+    if untagged_count:
+        lines.append(f"  [no project] — {untagged_count} open task{'s' if untagged_count != 1 else ''}")
+    lines.append(f"\nSay 'Show [project] tasks' to filter.")
+
+    await update.message.reply_text("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +436,15 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if tl in ("tasks", "show tasks", "my tasks"):
         await handle_tasks_show(update)
         return
+    if tl in ("today", "show today"):
+        await cmd_today(update, ctx)
+        return
+    if tl in ("week", "this week", "upcoming", "show week"):
+        await cmd_week(update, ctx)
+        return
+    if tl in ("projects", "show projects"):
+        await cmd_projects(update, ctx)
+        return
     if re.match(r'done\s+\S', tl):
         arg = re.sub(r'^done\s+', '', text, flags=re.IGNORECASE).strip()
         await handle_task_done(update, arg)
@@ -404,6 +544,9 @@ app.add_handler(CommandHandler("start", cmd_start))
 app.add_handler(CommandHandler("list", cmd_list))
 app.add_handler(CommandHandler("cancel", cmd_cancel))
 app.add_handler(CommandHandler("brief", cmd_brief))
+app.add_handler(CommandHandler("today", cmd_today))
+app.add_handler(CommandHandler("week", cmd_week))
+app.add_handler(CommandHandler("projects", cmd_projects))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 if __name__ == "__main__":
